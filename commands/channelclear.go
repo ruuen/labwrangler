@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -18,6 +19,9 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 		return
 	}
 
+	handlerStartTime := time.Now()
+	const batchLimit int = 100 // maximum discord page fetch/batch delete size
+
 	// Return initial deferred response to avoid timeout
 	err := session.InteractionRespond(event.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -28,7 +32,7 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 	}
 
 	// Fetch all channel messages in batches
-	allMessages := make([]*discordgo.Message, 0, 100)
+	allMessages := make([]*discordgo.Message, 0, batchLimit)
 	for true {
 		length := len(allMessages)
 		beforeId := ""
@@ -36,7 +40,7 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 			beforeId = allMessages[length-1].ID
 		}
 
-		messages, err := session.ChannelMessages(event.ChannelID, 100, beforeId, "", "")
+		messages, err := session.ChannelMessages(event.ChannelID, batchLimit, beforeId, "", "")
 		if err != nil {
 			log.Printf("error fetching messages: %v", err)
 			break
@@ -48,6 +52,17 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 
 		allMessages = append(allMessages, messages...)
 	}
+
+	// We need to avoid deleting the app interaction message so we can reply to it later
+	// It will be one of the first ones, as disc messages are returned in descending order
+	allMessages = slices.DeleteFunc(allMessages, func(m *discordgo.Message) bool {
+		if m.Interaction != nil {
+			if m.Interaction.ID == event.Interaction.ID {
+				return true
+			}
+		}
+		return false
+	})
 
 	// channelbulkmessagedelete has a restriction of 2 weeks old; will 400 if anything older
 	// therefore we split messages <2 weeks and >2 weeks to be processed separately
@@ -73,34 +88,53 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 		bulkDeleteIds = append(bulkDeleteIds, v.ID)
 	}
 
-	// perform bulk deletes in batches of 100
+	deletedCount := 0
+	// perform bulk deletes in batches
 	for true {
 		count := len(bulkDeleteIds)
 
-		if count < 100 {
+		if count < batchLimit {
 			batch := bulkDeleteIds[:count]
-			log.Printf("Batch count: %v", len(batch)) // bulk delete call goes here when you're ready to light this candle
+			err = session.ChannelMessagesBulkDelete(event.ChannelID, batch)
+			if err != nil {
+				log.Printf("Failed to delete batch of messages: %v", err)
+				break
+			}
+			deletedCount += count
 			break
 		}
 		
-		batch := bulkDeleteIds[:100]
-		bulkDeleteIds = bulkDeleteIds[100:]
-		
-		log.Printf("Batch count: %v", len(batch)) // bulk delete call goes here when you're ready to light this candle
+		batch := bulkDeleteIds[:batchLimit]
+		bulkDeleteIds = bulkDeleteIds[batchLimit:]
+		err = session.ChannelMessagesBulkDelete(event.ChannelID, batch)
+		if err != nil {
+			log.Printf("Failed to delete batch of messages: %v", err)
+			continue
+		}
+		deletedCount += batchLimit
+
 	}
 
 	// perform individual deletes
 	for _, v := range individualDeleteIds {
-		log.Printf("Deleting message id %v", v) // individual delete call goes here when you need to waste this sucker
+		err = session.ChannelMessageDelete(event.ChannelID, v)
+		if err != nil {
+			log.Printf("Failed to delete message %v: %v", v, err)
+			continue
+		}
+		deletedCount++
 	}
 
 	// update reply to user and tell them how much hellfire they just rained
-	replyContent := fmt.Sprintf("Deleted %v messages.", len(allMessages))
+	replyContent := fmt.Sprintf("Deleted %v messages.", deletedCount)
 	_, err = session.InteractionResponseEdit(event.Interaction, &discordgo.WebhookEdit{
 		Content: &replyContent,
 	})
 	if err != nil {
 		log.Printf("Failed to edit initial interaction msg: %v", err)
 	}
+
+	handlerDuration := time.Since(handlerStartTime).String()
+	log.Printf("%v: Deleted %v messages in %v", ChannelClearCommand.Name, deletedCount, handlerDuration)
 }
 
