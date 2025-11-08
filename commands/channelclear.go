@@ -20,8 +20,14 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 		return
 	}
 
-	// TODO: return an initial response message to caller, edit this message at end to provide count summary.
-	// this can be done with interactionresponsedefers in discordgo
+	// Return initial deferred response to avoid timeout
+	err := session.InteractionRespond(event.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+	if err != nil {
+		log.Printf("Failed to send defer message: %v", err)
+		return
+	}
 
 	// channelbulkmessagedelete has a restriction of 2 weeks old; will 400 if anything older
 	// bulk delete under 2 weeks old, then individual delete the remainder
@@ -44,7 +50,6 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 			break
 		}
 
-		log.Printf("Fetched batch of %v messages\n", len(messages))
 		allMessages = append(allMessages, messages...)
 	}
 
@@ -92,13 +97,14 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 		log.Printf("Deleting message id %v", v.ID) // individual delete call goes here when you need to waste this sucker
 	}
 
-	// reply to user and tell them how much hellfire they just rained
-	session.InteractionRespond(event.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("Deleted %v messages.", len(allMessages)), // replace len(allMessages) with ref to a count var
-		},
+	// update reply to user and tell them how much hellfire they just rained
+	replyContent := fmt.Sprintf("Deleted %v messages.", len(allMessages))
+	_, err = session.InteractionResponseEdit(event.Interaction, &discordgo.WebhookEdit{
+		Content: &replyContent,
 	})
+	if err != nil {
+		log.Printf("Failed to edit initial interaction msg: %v", err)
+	}
 }
 
 // any other helper funcs used inside this command
