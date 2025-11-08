@@ -1,7 +1,6 @@
 package config
 
 import (
-	// "errors"
 	"flag"
 	"os"
 
@@ -74,10 +73,6 @@ func (c *AppConfig) Init() error {
 	// app defaults (TBC)
 
 	for _, v := range settings {
-		// if v.required == true && v.value == "" {
-		// 	return errors.New("Value was not provided for " + v.name)
-		// }
-
 		c.Settings[v.name] = v.value
 	}
 
