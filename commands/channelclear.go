@@ -8,13 +8,11 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// command definition
 var ChannelClearCommand = discordgo.ApplicationCommand{
 	Name: "clear-channel-all",
 	Description: "Clear all messages from current channel",
 }
 
-// handler func
 func ChannelClearHandler(session *discordgo.Session, event *discordgo.InteractionCreate) {
 	if event.ApplicationCommandData().Name != ChannelClearCommand.Name {
 		return
@@ -29,15 +27,13 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 		return
 	}
 
-	// channelbulkmessagedelete has a restriction of 2 weeks old; will 400 if anything older
-	// bulk delete under 2 weeks old, then individual delete the remainder
-	var allMessages []*discordgo.Message
-	// TODO: move this to own fn called in recursion, pass in ptr to bulk and individual slices, keep allmessages inside fn
-	// TODO: bulkdeletes and individualdeletes slices should only store the messageid; storing the whole message struct is moving a lot of extra data around
+	// Fetch all channel messages in batches
+	allMessages := make([]*discordgo.Message, 0, 100)
 	for true {
+		length := len(allMessages)
 		beforeId := ""
-		if len(allMessages) > 0 {
-			beforeId = allMessages[len(allMessages)-1].ID
+		if length > 0 {
+			beforeId = allMessages[length-1].ID
 		}
 
 		messages, err := session.ChannelMessages(event.ChannelID, 100, beforeId, "", "")
@@ -53,48 +49,49 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 		allMessages = append(allMessages, messages...)
 	}
 
+	// channelbulkmessagedelete has a restriction of 2 weeks old; will 400 if anything older
+	// therefore we split messages <2 weeks and >2 weeks to be processed separately
 	var (
-		individualDeletes []*discordgo.Message
-		bulkDeletes []*discordgo.Message
+		individualDeleteIds []string
+		bulkDeleteIds []string
 		bufferMins int8 = 5
 	)
-	bulkCutoffTime := time.Now().UTC().AddDate(0, 0, -14).Add(-time.Duration(bufferMins) * time.Minute)
+	bulkCutoffTime := time.Now().UTC().AddDate(0, 0, -14).Add(-time.Duration(bufferMins) * time.Minute) // 2 weeks and 5 mins in past
 
- 	for _, v := range allMessages {
+	for i := 0; i < len(allMessages); i++ {
+		v := allMessages[i]
 		timestamp, err := discordgo.SnowflakeTimestamp(v.ID)
 		if err != nil {
 			log.Println("Failed to parse snowflake to timestamp")
 		}
 
 		if timestamp.Before(bulkCutoffTime) {
-			individualDeletes = append(individualDeletes, v)
+			individualDeleteIds = append(individualDeleteIds, v.ID)
 			continue
 		}
 
-		bulkDeletes = append(bulkDeletes, v)
+		bulkDeleteIds = append(bulkDeleteIds, v.ID)
 	}
-
-	log.Printf("Bulk deletes: %v, Single deletes: %v\n", len(bulkDeletes), len(individualDeletes))
 
 	// perform bulk deletes in batches of 100
 	for true {
-		count := len(bulkDeletes)
+		count := len(bulkDeleteIds)
 
 		if count < 100 {
-			batch := bulkDeletes[:count]
+			batch := bulkDeleteIds[:count]
 			log.Printf("Batch count: %v", len(batch)) // bulk delete call goes here when you're ready to light this candle
 			break
 		}
 		
-		batch := bulkDeletes[:100]
-		bulkDeletes = bulkDeletes[100:]
+		batch := bulkDeleteIds[:100]
+		bulkDeleteIds = bulkDeleteIds[100:]
 		
 		log.Printf("Batch count: %v", len(batch)) // bulk delete call goes here when you're ready to light this candle
 	}
 
 	// perform individual deletes
-	for _, v := range individualDeletes {
-		log.Printf("Deleting message id %v", v.ID) // individual delete call goes here when you need to waste this sucker
+	for _, v := range individualDeleteIds {
+		log.Printf("Deleting message id %v", v) // individual delete call goes here when you need to waste this sucker
 	}
 
 	// update reply to user and tell them how much hellfire they just rained
@@ -107,4 +104,3 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 	}
 }
 
-// any other helper funcs used inside this command
