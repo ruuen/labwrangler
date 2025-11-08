@@ -8,27 +8,48 @@ import (
 	"syscall"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/joho/godotenv"
 	"github.com/ruuen/labwrangler/commands"
 )
 
 func main() {
-	// TODO: load from env files, using flags for now
-	appId := flag.String("appId", "", "Application ID for Discord")
-	appToken := flag.String("appToken", "", "Application token for Discord")
-	// this is fine though but also give option to load from env/config file in some priority
-	guildId := flag.String("guildId", "", "Guild ID to monitor")
+	// Config settings; priority: cmdline->env vars->config file
+	// TODO: add a wrapper struct for app's config settings and get this out of main
+	var guildId string
+	var appId string
+	var appToken string
+	flag.StringVar(&guildId, "guildId", "", "Guild ID to monitor")
 	flag.Parse()
 
-	s, err := discordgo.New("Bot " + *appToken)
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Unable to load environment variables: %v", err)
+	}
+	appId = os.Getenv("DISCORD_APP_ID")
+	appToken = os.Getenv("DISCORD_APP_TOKEN")
+	if guildId == "" {
+		guildId = os.Getenv("DISCORD_GUILD_ID")
+	}
+
+	// TODO: this needs later improvement with the config wrapper to dynamically check and return missing settings. im the only dunce who would forget right now so it's fine :)
+	switch {
+	case appId == "":
+	case appToken == "":
+	case guildId == "":
+		log.Fatalf("You haven't provided a configuration setting. I'll leave it up to you to guess which one. Good luck!")
+	}
+
+	s, err := discordgo.New("Bot " + appToken)
 	if err != nil {
 		log.Fatalf("Unable to open Discord session: %v", err)
 	}
 
+	// Command registration
 	targetCommands := []*discordgo.ApplicationCommand{
 		&commands.ChannelClearCommand,
 	}
 
-	createdCommands, err := s.ApplicationCommandBulkOverwrite(*appId, *guildId, targetCommands)
+	createdCommands, err := s.ApplicationCommandBulkOverwrite(appId, guildId, targetCommands)
 	if err != nil {
 		log.Fatalf("Failed to create command: %v", err)
 	}
@@ -37,6 +58,7 @@ func main() {
 		log.Printf("Created command: %v", cmd.Name)
 	}
 
+	// Handler registration
 	s.AddHandler(commands.ChannelClearHandler)
 
 	err = s.Open()
