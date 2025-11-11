@@ -11,7 +11,7 @@ import (
 )
 
 var ChannelClearCommand = discordgo.ApplicationCommand{
-	Name: "clear-channel-all",
+	Name: "channel-clear-all",
 	Description: "Clear all messages from current channel",
 }
 
@@ -91,33 +91,8 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 	}
 
 	deletedCount := 0
-	// perform bulk deletes in batches
-	for true {
-		count := len(bulkDeleteIds)
-
-		if count < batchLimit {
-			batch := bulkDeleteIds[:count]
-			err = session.ChannelMessagesBulkDelete(event.ChannelID, batch)
-			if err != nil {
-				log.Printf("Failed to delete batch of messages: %v", err)
-				break
-			}
-			deletedCount += count
-			break
-		}
-		batch := bulkDeleteIds[:batchLimit]
-		bulkDeleteIds = bulkDeleteIds[batchLimit:]
-		err = session.ChannelMessagesBulkDelete(event.ChannelID, batch)
-		if err != nil {
-			log.Printf("Failed to delete batch of messages: %v", err)
-			continue
-		}
-		deletedCount += batchLimit
-
-	}
-
-	// perform individual deletes
-	deletedCount += massDeleteSingleMessages(session, event.ChannelID, &individualDeleteIds)
+	deletedCount += massDeleteBulkMessages(session, event.ChannelID, batchLimit, bulkDeleteIds)
+	deletedCount += massDeleteSingleMessages(session, event.ChannelID, individualDeleteIds)
 
 	// update reply to user and tell them how much hellfire they just rained
 	replyContent := fmt.Sprintf("Deleted %v messages.", deletedCount)
@@ -132,12 +107,42 @@ func ChannelClearHandler(session *discordgo.Session, event *discordgo.Interactio
 	log.Printf("%v: Deleted %v messages in %v", ChannelClearCommand.Name, deletedCount, handlerDuration)
 }
 
-func massDeleteSingleMessages(session *discordgo.Session, channelId string, messageIds *[]string) int {
+func massDeleteBulkMessages(session *discordgo.Session, channelId string, batchLimit int, messageIds []string) int {
+	var deletedCount int
+
+	for true {
+		count := len(messageIds)
+
+		if count < batchLimit {
+			batch := messageIds[:count]
+			err := session.ChannelMessagesBulkDelete(channelId, batch)
+			if err != nil {
+				log.Printf("Failed to delete batch of messages: %v", err)
+				break
+			}
+			deletedCount += count
+			break
+		}
+		batch := messageIds[:batchLimit]
+		messageIds = messageIds[batchLimit:]
+		err := session.ChannelMessagesBulkDelete(channelId, batch)
+		if err != nil {
+			log.Printf("Failed to delete batch of messages: %v", err)
+			continue
+		}
+		deletedCount += batchLimit
+
+	}
+
+	return deletedCount
+}
+
+func massDeleteSingleMessages(session *discordgo.Session, channelId string, messageIds []string) int {
 	var deletedCount int
 	var minDeleteDelay int = 600
 	var maxDeleteDelay int = 1600
 
-	for _, v := range *messageIds {
+	for _, v := range messageIds {
 		// buffer for preventing ratelimiting
 		seed := rand.IntN(maxDeleteDelay-minDeleteDelay) + minDeleteDelay
 		deleteDelay := time.Duration(seed) * time.Millisecond 
